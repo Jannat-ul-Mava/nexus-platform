@@ -1,166 +1,134 @@
-import React, { useState } from 'react';
-import { Search, Filter, MapPin } from 'lucide-react';
-import { Input } from '../../components/ui/Input';
-import { Card, CardHeader, CardBody } from '../../components/ui/Card';
-import { Badge } from '../../components/ui/Badge';
-import { EntrepreneurCard } from '../../components/entrepreneur/EntrepreneurCard';
-import { entrepreneurs } from '../../data/users';
+import React, { useState, useEffect } from 'react';
+import { Search, Loader, MessageCircle } from 'lucide-react';
+import { Card, CardBody } from '../../components/ui/Card';
+import { Button } from '../../components/ui/Button';
+import { useNavigate } from 'react-router-dom';
+import { userAPI, collaborationAPI } from '../../services/api';
+import toast from 'react-hot-toast';
 
 export const EntrepreneursPage: React.FC = () => {
+  const navigate = useNavigate();
+  const [entrepreneurs, setEntrepreneurs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedIndustries, setSelectedIndustries] = useState<string[]>([]);
-  const [selectedFundingRange, setSelectedFundingRange] = useState<string[]>([]);
-  
-  // Get unique industries and funding ranges
-  const allIndustries = Array.from(new Set(entrepreneurs.map(e => e.industry)));
-  const fundingRanges = ['< $500K', '$500K - $1M', '$1M - $5M', '> $5M'];
-  
-  // Filter entrepreneurs based on search and filters
-  const filteredEntrepreneurs = entrepreneurs.filter(entrepreneur => {
-    const matchesSearch = searchQuery === '' || 
-      entrepreneur.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      entrepreneur.startupName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      entrepreneur.industry.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      entrepreneur.pitchSummary.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    const matchesIndustry = selectedIndustries.length === 0 ||
-      selectedIndustries.includes(entrepreneur.industry);
-    
-    // Simple funding range filter based on the amount string
-    const matchesFunding = selectedFundingRange.length === 0 || 
-      selectedFundingRange.some(range => {
-        const amount = parseInt(entrepreneur.fundingNeeded.replace(/[^0-9]/g, ''));
-        switch (range) {
-          case '< $500K': return amount < 500;
-          case '$500K - $1M': return amount >= 500 && amount <= 1000;
-          case '$1M - $5M': return amount > 1000 && amount <= 5000;
-          case '> $5M': return amount > 5000;
-          default: return true;
-        }
-      });
-    
-    return matchesSearch && matchesIndustry && matchesFunding;
+  const [selectedIndustry, setSelectedIndustry] = useState('');
+  const [sendingRequest, setSendingRequest] = useState<string | null>(null);
+  const [sentRequests, setSentRequests] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const [entRes, collabRes] = await Promise.all([
+          userAPI.getEntrepreneurs({ limit: 50 }),
+          collaborationAPI.getAll()
+        ]);
+        setEntrepreneurs(entRes.data.users || []);
+        const sent = new Set((collabRes.data.collaborations || []).map((c: any) => c.entrepreneur?._id));
+        setSentRequests(sent);
+      } catch { toast.error('Failed to load entrepreneurs'); }
+      finally { setLoading(false); }
+    };
+    load();
+  }, []);
+
+  const handleConnect = async (entrepreneurId: string) => {
+    if (sentRequests.has(entrepreneurId)) return toast.error('Request already sent');
+    setSendingRequest(entrepreneurId);
+    try {
+      await collaborationAPI.send(entrepreneurId, "Hi! I'm an investor interested in your startup. Let's connect!");
+      toast.success('Collaboration request sent!');
+      setSentRequests(prev => new Set([...prev, entrepreneurId]));
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || 'Failed to send request');
+    } finally { setSendingRequest(null); }
+  };
+
+  const industries = [...new Set(entrepreneurs.map(e => e.industry).filter(Boolean))];
+
+  const filtered = entrepreneurs.filter(ent => {
+    const matchSearch = !searchQuery ||
+      ent.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (ent.startupName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (ent.industry || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (ent.pitchSummary || '').toLowerCase().includes(searchQuery.toLowerCase());
+    const matchIndustry = !selectedIndustry || ent.industry === selectedIndustry;
+    return matchSearch && matchIndustry;
   });
-  
-  const toggleIndustry = (industry: string) => {
-    setSelectedIndustries(prev => 
-      prev.includes(industry)
-        ? prev.filter(i => i !== industry)
-        : [...prev, industry]
-    );
-  };
-  
-  const toggleFundingRange = (range: string) => {
-    setSelectedFundingRange(prev => 
-      prev.includes(range)
-        ? prev.filter(r => r !== range)
-        : [...prev, range]
-    );
-  };
-  
+
   return (
     <div className="space-y-6 animate-fade-in">
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Find Startups</h1>
-        <p className="text-gray-600">Discover promising startups looking for investment</p>
+        <p className="text-gray-600">Discover entrepreneurs looking for investment</p>
       </div>
-      
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        {/* Filters sidebar */}
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <h2 className="text-lg font-medium text-gray-900">Filters</h2>
-            </CardHeader>
-            <CardBody className="space-y-6">
-              <div>
-                <h3 className="text-sm font-medium text-gray-900 mb-2">Industry</h3>
-                <div className="space-y-2">
-                  {allIndustries.map(industry => (
-                    <button
-                      key={industry}
-                      onClick={() => toggleIndustry(industry)}
-                      className={`block w-full text-left px-3 py-2 rounded-md text-sm ${
-                        selectedIndustries.includes(industry)
-                          ? 'bg-primary-50 text-primary-700'
-                          : 'text-gray-700 hover:bg-gray-50'
-                      }`}
-                    >
-                      {industry}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              
-              <div>
-                <h3 className="text-sm font-medium text-gray-900 mb-2">Funding Range</h3>
-                <div className="space-y-2">
-                  {fundingRanges.map(range => (
-                    <button
-                      key={range}
-                      onClick={() => toggleFundingRange(range)}
-                      className={`block w-full text-left px-3 py-2 rounded-md text-sm ${
-                        selectedFundingRange.includes(range)
-                          ? 'bg-primary-50 text-primary-700'
-                          : 'text-gray-700 hover:bg-gray-50'
-                      }`}
-                    >
-                      {range}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              
-              <div>
-                <h3 className="text-sm font-medium text-gray-900 mb-2">Location</h3>
-                <div className="space-y-2">
-                  <button className="flex items-center w-full text-left px-3 py-2 rounded-md text-sm text-gray-700 hover:bg-gray-50">
-                    <MapPin size={16} className="mr-2" />
-                    San Francisco, CA
-                  </button>
-                  <button className="flex items-center w-full text-left px-3 py-2 rounded-md text-sm text-gray-700 hover:bg-gray-50">
-                    <MapPin size={16} className="mr-2" />
-                    New York, NY
-                  </button>
-                  <button className="flex items-center w-full text-left px-3 py-2 rounded-md text-sm text-gray-700 hover:bg-gray-50">
-                    <MapPin size={16} className="mr-2" />
-                    Boston, MA
-                  </button>
-                </div>
-              </div>
-            </CardBody>
-          </Card>
-        </div>
-        
-        {/* Main content */}
-        <div className="lg:col-span-3 space-y-6">
-          <div className="flex items-center gap-4">
-            <Input
-              placeholder="Search startups by name, industry, or keywords..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              startAdornment={<Search size={18} />}
-              fullWidth
-            />
-            
-            <div className="flex items-center gap-2">
-              <Filter size={18} className="text-gray-500" />
-              <span className="text-sm text-gray-600">
-                {filteredEntrepreneurs.length} results
-              </span>
+
+      <Card>
+        <CardBody>
+          <div className="flex flex-wrap gap-3 items-center">
+            <div className="relative flex-1 min-w-48">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Search startups..."
+                className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
             </div>
+            <select value={selectedIndustry} onChange={e => setSelectedIndustry(e.target.value)}
+              className="px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500">
+              <option value="">All Industries</option>
+              {industries.map(i => <option key={i} value={i}>{i}</option>)}
+            </select>
           </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {filteredEntrepreneurs.map(entrepreneur => (
-              <EntrepreneurCard
-                key={entrepreneur.id}
-                entrepreneur={entrepreneur}
-              />
-            ))}
-          </div>
+        </CardBody>
+      </Card>
+
+      {loading ? (
+        <div className="flex justify-center py-16"><Loader size={28} className="animate-spin text-gray-400" /></div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-16">
+          <p className="text-gray-500 font-medium">No entrepreneurs found</p>
         </div>
-      </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {filtered.map(ent => (
+            <div key={ent._id} className="bg-white rounded-xl border border-gray-200 p-5 hover:shadow-md transition-shadow">
+              <div className="flex items-start gap-3 mb-4">
+                <div className="relative">
+                  <img src={ent.avatarUrl || `https://ui-avatars.com/api/?name=${ent.name}&background=random`}
+                    alt={ent.name} className="w-14 h-14 rounded-full object-cover" />
+                  <span className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-white ${ent.isOnline ? 'bg-green-400' : 'bg-gray-300'}`} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-gray-900">{ent.name}</p>
+                  <p className="text-sm text-primary-600 font-medium">{ent.startupName || 'Startup'}</p>
+                  <p className="text-xs text-gray-400">{ent.industry || 'Technology'} · {ent.location || 'Remote'}</p>
+                </div>
+              </div>
+              {ent.pitchSummary && <p className="text-sm text-gray-600 line-clamp-2 mb-3">{ent.pitchSummary}</p>}
+              {ent.fundingNeeded && (
+                <p className="text-xs text-green-600 font-semibold mb-3">Seeking: {ent.fundingNeeded}</p>
+              )}
+              <div className="grid grid-cols-3 gap-2 text-center text-xs text-gray-500 mb-4 py-2 border-y border-gray-100">
+                <div><p className="font-semibold text-gray-900">{ent.foundedYear || '—'}</p><p>Founded</p></div>
+                <div><p className="font-semibold text-gray-900">{ent.teamSize || '—'}</p><p>Team</p></div>
+                <div><p className="font-semibold text-gray-900">{ent.industry || '—'}</p><p>Industry</p></div>
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" className="flex-1"
+                  onClick={() => navigate(`/profile/entrepreneur/${ent._id}`)}>Profile</Button>
+                <Button size="sm" className="flex-1"
+                  isLoading={sendingRequest === ent._id}
+                  disabled={sentRequests.has(ent._id)}
+                  onClick={() => handleConnect(ent._id)}>
+                  {sentRequests.has(ent._id) ? '✓ Sent' : 'Connect'}
+                </Button>
+                <Button size="sm" variant="ghost"
+                  onClick={() => navigate(`/chat/${ent._id}`)}>
+                  <MessageCircle size={14} />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };

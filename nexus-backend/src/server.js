@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
+const path = require('path');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -9,7 +10,6 @@ const rateLimit = require('express-rate-limit');
 const connectDB = require('./config/database');
 const { initializeSocket } = require('./socket/socketHandler');
 
-// Route imports
 const authRoutes = require('./routes/auth.routes');
 const userRoutes = require('./routes/user.routes');
 const meetingRoutes = require('./routes/meeting.routes');
@@ -20,51 +20,68 @@ const messageRoutes = require('./routes/message.routes');
 const notificationRoutes = require('./routes/notification.routes');
 
 const app = express();
-app.set('trust proxy', 1);
 const server = http.createServer(app);
 
-// Socket.IO setup
-const io = new Server(server, {
-  cors: {
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
-    methods: ['GET', 'POST'],
-    credentials: true
-  }
+// ── MUST be first: trust proxy for ngrok/Render/Vercel ───────────────────────
+app.set('trust proxy', 1);
+
+// ── Skip ngrok browser warning for ALL requests ──────────────────────────────
+app.use((req, res, next) => {
+  res.setHeader('ngrok-skip-browser-warning', 'true');
+  res.setHeader('bypass-tunnel-reminder', 'true');
+  next();
 });
 
-// Connect to MongoDB
+// Socket.IO
+const io = new Server(server, {
+  cors: { origin: '*', methods: ['GET', 'POST'], credentials: true }
+});
+
 connectDB();
 
-// ── Security Middleware ──────────────────────────────────────────────────────
-app.use(helmet());
+// ── Security ─────────────────────────────────────────────────────────────────
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,
-  message: { success: false, message: 'Too many requests, please try again later.' }
+  windowMs: 15 * 60 * 1000,
+  max: 500,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.method === 'OPTIONS',
+  message: { success: false, message: 'Too many requests.' }
 });
 app.use('/api/', limiter);
 
-// Stricter limiter for auth endpoints
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10,
-  message: { success: false, message: 'Too many auth attempts, please try again later.' }
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many auth attempts.' }
 });
 
-// ── General Middleware ───────────────────────────────────────────────────────
+// ── CORS — allow everything in development ───────────────────────────────────
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
-  credentials: true
+  origin: true, // reflect the request origin
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning', 'bypass-tunnel-reminder']
 }));
+
+// Handle preflight for all routes
+app.options('*', cors());
+
 app.use(morgan('dev'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// ── Stripe webhook (raw body needed) ────────────────────────────────────────
+// Serve uploaded files (local storage fallback when Cloudinary not set)
+app.use('/uploads', express.static(path.join(process.cwd(), 'uploads')));
+
+// Stripe webhook needs raw body
 app.use('/api/payments/webhook', express.raw({ type: 'application/json' }));
 
-// ── Routes ───────────────────────────────────────────────────────────────────
+// ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/meetings', meetingRoutes);
@@ -74,17 +91,15 @@ app.use('/api/collaborations', collaborationRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/notifications', notificationRoutes);
 
-// Health check
 app.get('/api/health', (req, res) => {
   res.json({ success: true, message: 'Nexus API is running', timestamp: new Date() });
 });
 
-// ── Socket.IO ────────────────────────────────────────────────────────────────
 initializeSocket(io);
 
-// ── Error Handler ────────────────────────────────────────────────────────────
+// Error handler
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error('Error:', err.message);
   res.status(err.statusCode || 500).json({
     success: false,
     message: err.message || 'Internal Server Error'

@@ -1,187 +1,162 @@
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Users, PieChart, Filter, Search, PlusCircle } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { Users, Search, PlusCircle, Loader, DollarSign, Calendar, TrendingUp } from 'lucide-react';
 import { Button } from '../../components/ui/Button';
 import { Card, CardBody, CardHeader } from '../../components/ui/Card';
-import { Input } from '../../components/ui/Input';
-import { Badge } from '../../components/ui/Badge';
-import { EntrepreneurCard } from '../../components/entrepreneur/EntrepreneurCard';
 import { useAuth } from '../../context/AuthContext';
-import { Entrepreneur } from '../../types';
-import { entrepreneurs } from '../../data/users';
-import { getRequestsFromInvestor } from '../../data/collaborationRequests';
+import { userAPI, collaborationAPI, meetingAPI, paymentAPI } from '../../services/api';
+import { useNavigate as useNav } from 'react-router-dom';
+import toast from 'react-hot-toast';
 
 export const InvestorDashboard: React.FC = () => {
   const { user } = useAuth();
+  const navigate = useNavigate();
+  const [entrepreneurs, setEntrepreneurs] = useState<any[]>([]);
+  const [collaborations, setCollaborations] = useState<any[]>([]);
+  const [stats, setStats] = useState({ sent: 0, accepted: 0, meetings: 0, balance: 0 });
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedIndustries, setSelectedIndustries] = useState<string[]>([]);
-  
-  if (!user) return null;
-  
-  // Get collaboration requests sent by this investor
-  const sentRequests = getRequestsFromInvestor(user.id);
-  const requestedEntrepreneurIds = sentRequests.map(req => req.entrepreneurId);
-  
-  // Filter entrepreneurs based on search and industry filters
-  const filteredEntrepreneurs = entrepreneurs.filter(entrepreneur => {
-    // Search filter
-    const matchesSearch = searchQuery === '' || 
-      entrepreneur.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      entrepreneur.startupName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      entrepreneur.industry.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      entrepreneur.pitchSummary.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    // Industry filter
-    const matchesIndustry = selectedIndustries.length === 0 || 
-      selectedIndustries.includes(entrepreneur.industry);
-    
-    return matchesSearch && matchesIndustry;
-  });
-  
-  // Get unique industries for filter
-  const industries = Array.from(new Set(entrepreneurs.map(e => e.industry)));
-  
-  // Toggle industry selection
-  const toggleIndustry = (industry: string) => {
-    setSelectedIndustries(prevSelected => 
-      prevSelected.includes(industry)
-        ? prevSelected.filter(i => i !== industry)
-        : [...prevSelected, industry]
-    );
+  const [loading, setLoading] = useState(true);
+  const [sendingRequest, setSendingRequest] = useState<string | null>(null);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const [entRes, collabRes, meetRes, walletRes] = await Promise.all([
+          userAPI.getEntrepreneurs({ limit: 8 }),
+          collaborationAPI.getAll(),
+          meetingAPI.getAll(),
+          paymentAPI.getWallet(),
+        ]);
+        const collabs = collabRes.data.collaborations || [];
+        setEntrepreneurs(entRes.data.users || []);
+        setCollaborations(collabs);
+        setStats({
+          sent: collabs.length,
+          accepted: collabs.filter((c: any) => c.status === 'accepted').length,
+          meetings: (meetRes.data.meetings || []).filter((m: any) => new Date(m.scheduledAt) > new Date()).length,
+          balance: walletRes.data.balance || 0,
+        });
+      } catch { /* silent */ }
+      finally { setLoading(false); }
+    };
+    load();
+  }, []);
+
+  const handleConnect = async (entrepreneurId: string) => {
+    const already = collaborations.find(c => c.entrepreneur?._id === entrepreneurId);
+    if (already) return toast.error('Request already sent');
+    setSendingRequest(entrepreneurId);
+    try {
+      await collaborationAPI.send(entrepreneurId, `Hi! I'm interested in learning more about your startup. Let's connect!`);
+      toast.success('Collaboration request sent!');
+      setCollaborations(prev => [...prev, { entrepreneur: { _id: entrepreneurId }, status: 'pending' }]);
+      setStats(s => ({ ...s, sent: s.sent + 1 }));
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || 'Failed to send request');
+    } finally { setSendingRequest(null); }
   };
-  
+
+  if (!user) return null;
+
+  const filtered = entrepreneurs.filter(e =>
+    searchQuery === '' ||
+    e.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (e.startupName || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (e.industry || '').toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const requestedIds = new Set(collaborations.map(c => c.entrepreneur?._id));
+
+  const statCards = [
+    { label: 'Requests Sent', value: stats.sent, icon: Users, color: 'text-primary-600', bg: 'bg-primary-50' },
+    { label: 'Accepted', value: stats.accepted, icon: TrendingUp, color: 'text-green-600', bg: 'bg-green-50' },
+    { label: 'Upcoming Meetings', value: stats.meetings, icon: Calendar, color: 'text-accent-600', bg: 'bg-accent-50' },
+    { label: 'Wallet Balance', value: `$${stats.balance.toFixed(2)}`, icon: DollarSign, color: 'text-secondary-600', bg: 'bg-secondary-50' },
+  ];
+
   return (
     <div className="space-y-6 animate-fade-in">
-      <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+      <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Discover Startups</h1>
-          <p className="text-gray-600">Find and connect with promising entrepreneurs</p>
+          <h1 className="text-2xl font-bold text-gray-900">Welcome, {user.name}</h1>
+          <p className="text-gray-600">Discover and connect with promising startups</p>
         </div>
-        
-        <Link to="/entrepreneurs">
-          <Button
-            leftIcon={<PlusCircle size={18} />}
-          >
-            View All Startups
-          </Button>
-        </Link>
+        <Link to="/entrepreneurs"><Button leftIcon={<PlusCircle size={18} />}>Browse Startups</Button></Link>
       </div>
-      
-      {/* Filters and search */}
-      <div className="flex flex-col md:flex-row gap-4">
-        <div className="w-full md:w-2/3">
-          <Input
-            placeholder="Search startups, industries, or keywords..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            fullWidth
-            startAdornment={<Search size={18} />}
-          />
-        </div>
-        
-        <div className="w-full md:w-1/3">
-          <div className="flex items-center space-x-2">
-            <Filter size={18} className="text-gray-500" />
-            <span className="text-sm font-medium text-gray-700">Filter by:</span>
-            
-            <div className="flex flex-wrap gap-2">
-              {industries.map(industry => (
-                <Badge
-                  key={industry}
-                  variant={selectedIndustries.includes(industry) ? 'primary' : 'gray'}
-                  className="cursor-pointer"
-                  onClick={() => toggleIndustry(industry)}
-                >
-                  {industry}
-                </Badge>
-              ))}
+
+      {/* Stats */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {statCards.map(s => (
+          <Card key={s.label}>
+            <CardBody>
+              <div className="flex items-center gap-3">
+                <div className={`p-3 rounded-lg ${s.bg}`}><s.icon size={20} className={s.color} /></div>
+                <div>
+                  <p className="text-xs text-gray-500">{s.label}</p>
+                  {loading ? <div className="h-6 w-10 bg-gray-200 animate-pulse rounded mt-1" /> :
+                    <p className="text-xl font-bold text-gray-900">{s.value}</p>}
+                </div>
+              </div>
+            </CardBody>
+          </Card>
+        ))}
+      </div>
+
+      {/* Search + Entrepreneur Cards */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <h2 className="text-lg font-semibold text-gray-900">Discover Startups</h2>
+            <div className="relative w-64">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                placeholder="Search startups..."
+                className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary-500" />
             </div>
           </div>
-        </div>
-      </div>
-      
-      {/* Stats summary */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card className="bg-primary-50 border border-primary-100">
-          <CardBody>
-            <div className="flex items-center">
-              <div className="p-3 bg-primary-100 rounded-full mr-4">
-                <Users size={20} className="text-primary-700" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-primary-700">Total Startups</p>
-                <h3 className="text-xl font-semibold text-primary-900">{entrepreneurs.length}</h3>
-              </div>
+        </CardHeader>
+        <CardBody>
+          {loading ? (
+            <div className="flex justify-center py-12"><Loader size={24} className="animate-spin text-gray-400" /></div>
+          ) : filtered.length === 0 ? (
+            <div className="text-center py-12">
+              <Users size={40} className="mx-auto text-gray-300 mb-3" />
+              <p className="text-gray-500">{searchQuery ? 'No startups match your search' : 'No entrepreneurs registered yet'}</p>
             </div>
-          </CardBody>
-        </Card>
-        
-        <Card className="bg-secondary-50 border border-secondary-100">
-          <CardBody>
-            <div className="flex items-center">
-              <div className="p-3 bg-secondary-100 rounded-full mr-4">
-                <PieChart size={20} className="text-secondary-700" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-secondary-700">Industries</p>
-                <h3 className="text-xl font-semibold text-secondary-900">{industries.length}</h3>
-              </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {filtered.map(ent => {
+                const alreadySent = requestedIds.has(ent._id);
+                return (
+                  <div key={ent._id} className="border border-gray-200 rounded-xl p-4 hover:shadow-md transition-shadow">
+                    <div className="flex items-start gap-3">
+                      <img src={ent.avatarUrl || `https://ui-avatars.com/api/?name=${ent.name}&background=random`}
+                        alt={ent.name} className="w-12 h-12 rounded-full object-cover flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-gray-900">{ent.name}</p>
+                        <p className="text-sm text-primary-600 font-medium">{ent.startupName || 'Startup'}</p>
+                        <p className="text-xs text-gray-500 mt-0.5">{ent.industry || 'Technology'} · {ent.location || 'Remote'}</p>
+                        {ent.pitchSummary && <p className="text-xs text-gray-500 mt-1 line-clamp-2">{ent.pitchSummary}</p>}
+                        {ent.fundingNeeded && <p className="text-xs text-green-600 font-medium mt-1">Seeking: {ent.fundingNeeded}</p>}
+                      </div>
+                    </div>
+                    <div className="flex gap-2 mt-3">
+                      <Button size="sm" variant="outline" className="flex-1" onClick={() => navigate(`/profile/entrepreneur/${ent._id}`)}>View Profile</Button>
+                      <Button size="sm" className="flex-1"
+                        isLoading={sendingRequest === ent._id}
+                        disabled={alreadySent}
+                        onClick={() => handleConnect(ent._id)}>
+                        {alreadySent ? 'Requested' : 'Connect'}
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => navigate(`/chat/${ent._id}`)}>Chat</Button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-          </CardBody>
-        </Card>
-        
-        <Card className="bg-accent-50 border border-accent-100">
-          <CardBody>
-            <div className="flex items-center">
-              <div className="p-3 bg-accent-100 rounded-full mr-4">
-                <Users size={20} className="text-accent-700" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-accent-700">Your Connections</p>
-                <h3 className="text-xl font-semibold text-accent-900">
-                  {sentRequests.filter(req => req.status === 'accepted').length}
-                </h3>
-              </div>
-            </div>
-          </CardBody>
-        </Card>
-      </div>
-      
-      {/* Entrepreneurs grid */}
-      <div>
-        <Card>
-          <CardHeader>
-            <h2 className="text-lg font-medium text-gray-900">Featured Startups</h2>
-          </CardHeader>
-          
-          <CardBody>
-            {filteredEntrepreneurs.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {filteredEntrepreneurs.map(entrepreneur => (
-                  <EntrepreneurCard
-                    key={entrepreneur.id}
-                    entrepreneur={entrepreneur}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="text-center py-8">
-                <p className="text-gray-600">No startups match your filters</p>
-                <Button 
-                  variant="outline" 
-                  className="mt-2"
-                  onClick={() => {
-                    setSearchQuery('');
-                    setSelectedIndustries([]);
-                  }}
-                >
-                  Clear filters
-                </Button>
-              </div>
-            )}
-          </CardBody>
-        </Card>
-      </div>
+          )}
+        </CardBody>
+      </Card>
     </div>
   );
 };
